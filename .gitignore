@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+folder_history.db
+folder_history.db-shm
+folder_history.db-wal
