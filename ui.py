@@ -1,5 +1,6 @@
 """Gradio Web界面模块"""
 import os
+import logging
 import gradio as gr
 import queue
 import threading
@@ -7,6 +8,9 @@ from models import ScanResult
 from database import Database
 from scanner import FolderScanner, ResultFormatter, GB_THRESHOLD_BYTES
 from ai_analyzer import AIAnalyzer
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
 # 全局状态
@@ -248,33 +252,49 @@ def scan_folder(path: str, max_depth: int, exclude_paths: str, progress=gr.Progr
 
 def analyze_with_ai(config_id: int, session_id: int, quick_mode: bool):
     """使用AI分析扫描结果"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     global last_scan_result, ai_analyzer, db
+
+    logger.info(f"[UI] 开始AI分析，config_id: {config_id}, session_id: {session_id}, quick_mode: {quick_mode}")
 
     # 检查是否选择了配置
     if not config_id:
+        logger.warning("[UI] 未选择AI配置")
         return "❌ 请先选择一个AI配置", ""
 
     # 从数据库加载配置
     try:
         config = db.get_ai_config(config_id=config_id)
         if not config:
+            logger.error(f"[UI] 未找到AI配置，config_id: {config_id}")
             return "❌ 未找到选中的AI配置", ""
+        logger.info(f"[UI] 加载AI配置成功: {config['name']}, model: {config['model']}")
     except Exception as e:
+        logger.error(f"[UI] 加载AI配置异常: {str(e)}")
         return f"❌ 加载AI配置失败: {str(e)}", ""
 
     # 如果提供了session_id，从历史记录加载
     if session_id:
         try:
+            logger.info(f"[UI] 从历史记录加载扫描结果，session_id: {session_id}")
             result = db.rebuild_scan_result_from_session(session_id)
             if not result:
+                logger.error(f"[UI] 未找到扫描会话数据，session_id: {session_id}")
                 return "❌ 未找到该扫描会话的数据", ""
+            logger.info(f"[UI] 加载历史扫描成功，路径: {result.path}, 大小: {result.size_bytes}")
         except Exception as e:
+            logger.error(f"[UI] 加载历史扫描异常: {str(e)}")
             return f"❌ 加载历史扫描失败: {str(e)}", ""
     else:
         # 使用最后一次扫描的结果
+        logger.info("[UI] 使用最后一次扫描结果")
         result = last_scan_result
         if result is None:
+            logger.warning("[UI] 最后一次扫描结果为空")
             return "❌ 请先扫描文件夹后再使用AI分析功能，或选择历史扫描结果", ""
+        logger.info(f"[UI] 使用当前扫描结果，路径: {result.path}, 大小: {result.size_bytes}")
 
     try:
         # 创建AI分析器
@@ -305,10 +325,18 @@ API配置:
         yield status, ""
 
         # 执行分析
+        logger.info(f"[UI] 开始执行分析，模式: {'快速' if quick_mode else '完整'}")
         if quick_mode:
             analysis_result = ai_analyzer.quick_analyze(result)
         else:
             analysis_result = ai_analyzer.analyze(result, language=config['language'])
+        
+        logger.info(f"[UI] 分析完成，结果长度: {len(analysis_result) if analysis_result else 0}")
+        logger.info(f"[UI] 结果预览: {analysis_result[:200] if analysis_result else 'None'}...")
+        
+        if not analysis_result or len(analysis_result.strip()) == 0:
+            logger.error("[UI] 警告: AI分析返回结果为空！")
+            analysis_result = "❌ AI分析返回了空结果，请查看日志了解详情"
 
         # 显示结果
         result_text = f"""
@@ -331,7 +359,10 @@ API配置:
 
     except Exception as e:
         import traceback
-        error_msg = f"❌ AI分析失败\n\n错误信息: {str(e)}\n\n请检查：\n1. API Key是否正确\n2. Base URL是否可访问\n3. 网络连接是否正常\n4. 模型名称是否正确\n\n详细信息:\n{traceback.format_exc()}"
+        error_detail = traceback.format_exc()
+        logger.error(f"[UI] AI分析异常: {str(e)}")
+        logger.error(f"[UI] 异常详情:\n{error_detail}")
+        error_msg = f"❌ AI分析失败\n\n错误信息: {str(e)}\n\n请检查：\n1. API Key是否正确\n2. Base URL是否可访问\n3. 网络连接是否正常\n4. 模型名称是否正确\n\n详细信息:\n{error_detail}"
         yield error_msg, ""
 
 
@@ -523,12 +554,12 @@ def load_config_to_form(config_id: int):
     """加载配置到表单（用于编辑）"""
     global db
     if not config_id:
-        return "", "", "", "zh", None, ""
+        return "", "", "", "zh", None, "", ""
 
     try:
         config = db.get_ai_config(config_id=config_id)
         if not config:
-            return "", "", "", "zh", None, "❌ 未找到配置"
+            return "", "", "", "zh", None, "", "❌ 未找到配置"
         
         return (
             config['name'],
@@ -540,7 +571,7 @@ def load_config_to_form(config_id: int):
             f"✅ 已加载配置: {config['name']}"
         )
     except Exception as e:
-        return "", "", "", "zh", None, f"❌ 加载失败: {str(e)}"
+        return "", "", "", "zh", None, "", f"❌ 加载失败: {str(e)}"
 
 
 def load_config_to_form_by_name(config_name: str):
@@ -907,7 +938,7 @@ def create_ui():
         # 从配置下拉框加载配置到表单（用于编辑）- 使用change事件
         def on_config_selected_for_edit(config_id):
             if not config_id:
-                return "", "", "", "zh", None, ""
+                return "", "", "", "zh", None, "", ""
             return load_config_to_form(config_id)
         
         edit_config_dropdown.change(

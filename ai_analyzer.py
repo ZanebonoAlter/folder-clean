@@ -1,8 +1,13 @@
 """AI分析模块 - 使用OpenAI兼容接口分析扫描结果"""
 import os
+import logging
 from typing import Optional, List
 from models import ScanResult
 from scanner import FolderScanner, GB_THRESHOLD_BYTES
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class AIAnalyzer:
@@ -111,8 +116,15 @@ class AIAnalyzer:
         Returns:
             AI生成的清理建议文本
         """
+        logger.info(f"[AI分析] 开始分析，语言: {language}, 路径: {result.path}, 大小: {result.size_bytes}")
+        
         # 格式化扫描结果
         scan_text = self.format_scan_results(result)
+        logger.info(f"[AI分析] 格式化结果完成，文本长度: {len(scan_text)} 字符")
+        
+        if not scan_text or len(scan_text.strip()) == 0:
+            logger.warning("[AI分析] 警告: 格式化后的扫描结果为空！")
+            return "❌ 扫描结果为空，无法进行分析"
 
         # 构建提示词
         if language == "zh":
@@ -158,8 +170,12 @@ Use clear formatting including:
 
 Provide detailed analysis and suggestions."""
 
+        logger.info(f"[AI分析] 准备调用API，模型: {self.model}, Base URL: {self.base_url}")
+        logger.debug(f"[AI分析] System prompt长度: {len(system_prompt)}, User prompt长度: {len(user_prompt)}")
+
         try:
             # 调用OpenAI API
+            logger.info("[AI分析] 正在调用API...")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -170,18 +186,48 @@ Provide detailed analysis and suggestions."""
                 max_tokens=2000
             )
 
-            # 返回AI响应
-            return response.choices[0].message.content
+            logger.info(f"[AI分析] API调用成功，响应对象: {type(response)}")
+            logger.info(f"[AI分析] Response choices数量: {len(response.choices) if hasattr(response, 'choices') else 0}")
+            
+            if not hasattr(response, 'choices') or len(response.choices) == 0:
+                logger.error("[AI分析] 错误: API响应中没有choices")
+                return "❌ AI分析失败: API响应格式异常，没有返回结果"
+            
+            choice = response.choices[0]
+            logger.info(f"[AI分析] Choice对象: {type(choice)}, finish_reason: {getattr(choice, 'finish_reason', 'N/A')}")
+            
+            if not hasattr(choice, 'message') or choice.message is None:
+                logger.error("[AI分析] 错误: Choice中没有message")
+                return "❌ AI分析失败: API响应格式异常，没有返回消息"
+            
+            content = choice.message.content
+            logger.info(f"[AI分析] 获取到内容，长度: {len(content) if content else 0}, 内容预览: {content[:100] if content else 'None'}...")
+            
+            if not content or len(content.strip()) == 0:
+                logger.warning("[AI分析] 警告: API返回的内容为空")
+                return "❌ AI分析失败: API返回了空结果，可能是模型响应异常或token限制"
+            
+            logger.info("[AI分析] 分析完成，返回结果")
+            return content
 
         except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"[AI分析] 异常发生: {str(e)}")
+            logger.error(f"[AI分析] 异常详情:\n{error_detail}")
             return f"❌ AI分析失败: {str(e)}\n\n请检查：\n1. API Key是否正确\n2. Base URL是否可访问\n3. 模型名称是否正确"
 
     def quick_analyze(self, result: ScanResult) -> str:
         """快速分析 - 只分析最大的前10个文件夹"""
+        logger.info(f"[快速分析] 开始快速分析，路径: {result.path}, 大小: {result.size_bytes}")
+        
         # 创建一个只包含前10个大文件夹的简化结果
         large_folders = self._collect_large_folders(result)
+        logger.info(f"[快速分析] 收集到大文件夹数量: {len(large_folders)}")
+        
         large_folders.sort(key=lambda x: x['size_bytes'], reverse=True)
         top_10 = large_folders[:10]
+        logger.info(f"[快速分析] 选择前10个文件夹进行分析")
 
         # 构建简化分析文本
         text = f"# 快速分析 - 最大的10个文件夹\n\n"
@@ -194,8 +240,15 @@ Provide detailed analysis and suggestions."""
             text += f"   - 大小: {FolderScanner.format_size(folder['size_bytes'])}\n\n"
 
         text += "\n请提供这些文件夹的清理建议。"
+        
+        logger.info(f"[快速分析] 构建分析文本完成，文本长度: {len(text)} 字符")
+        
+        if not text or len(text.strip()) == 0:
+            logger.warning("[快速分析] 警告: 分析文本为空！")
+            return "❌ 快速分析失败: 无法生成分析文本"
 
         try:
+            logger.info(f"[快速分析] 准备调用API，模型: {self.model}, Base URL: {self.base_url}")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -209,9 +262,35 @@ Provide detailed analysis and suggestions."""
                 max_tokens=1000
             )
 
-            return response.choices[0].message.content
+            logger.info(f"[快速分析] API调用成功，响应对象: {type(response)}")
+            logger.info(f"[快速分析] Response choices数量: {len(response.choices) if hasattr(response, 'choices') else 0}")
+            
+            if not hasattr(response, 'choices') or len(response.choices) == 0:
+                logger.error("[快速分析] 错误: API响应中没有choices")
+                return "❌ 快速分析失败: API响应格式异常，没有返回结果"
+            
+            choice = response.choices[0]
+            logger.info(f"[快速分析] Choice对象: {type(choice)}, finish_reason: {getattr(choice, 'finish_reason', 'N/A')}")
+            
+            if not hasattr(choice, 'message') or choice.message is None:
+                logger.error("[快速分析] 错误: Choice中没有message")
+                return "❌ 快速分析失败: API响应格式异常，没有返回消息"
+            
+            content = choice.message.content
+            logger.info(f"[快速分析] 获取到内容，长度: {len(content) if content else 0}, 内容预览: {content[:100] if content else 'None'}...")
+            
+            if not content or len(content.strip()) == 0:
+                logger.warning("[快速分析] 警告: API返回的内容为空")
+                return "❌ 快速分析失败: API返回了空结果，可能是模型响应异常或token限制"
+            
+            logger.info("[快速分析] 分析完成，返回结果")
+            return content
 
         except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"[快速分析] 异常发生: {str(e)}")
+            logger.error(f"[快速分析] 异常详情:\n{error_detail}")
             return f"❌ 快速分析失败: {str(e)}"
 
 
