@@ -4,4 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["gradio>=4.0.0", "pandas>=2.0.0", "openai>=1.0.0"]
+dependencies = [
+    "gradio>=4.0.0",
+ "pandas>=2.0.0",
+ "openai>=1.0.0",
+ "pyinstaller>=6.18.0",
+]
